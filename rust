@@ -1,0 +1,88 @@
+use serenity::async_trait;
+use serenity::model::channel::Message;
+use serenity::model::gateway::Ready;
+use serenity::prelude::*;
+use rand::Rng;
+use std::time::{Duration, Instant};
+use std::collections::HashMap;
+
+struct Handler {
+    user_last_message: HashMap<u64, Instant>,
+}
+
+#[async_trait]
+impl EventHandler for Handler {
+    async fn message(&self, ctx: Context, msg: Message) {
+        if msg.content.starts_with("!") {
+            let command = msg.content[1..].split_whitespace().next().unwrap_or("");
+            
+            match command {
+                "ping" => {
+                    if let Err(why) = msg.channel_id.say(&ctx.http, "Pong!").await {
+                        println!("Error sending message: {:?}", why);
+                    }
+                },
+                "roll" => {
+                    let num: u32 = rand::thread_rng().gen_range(1..=100);
+                    if let Err(why) = msg.channel_id.say(&ctx.http, format!("You rolled: {}", num)).await {
+                        println!("Error sending message: {:?}", why);
+                    }
+                },
+                "kick" => {
+                    if let Some(member) = msg.member(&ctx.http).await.unwrap() {
+                        if member.permissions(&ctx.cache).await.unwrap().kick_members() {
+                            if let Some(user) = msg.mentions.first() {
+                                if let Err(why) = msg.guild_id.unwrap().kick(&ctx.http, user.id).await {
+                                    msg.reply(&ctx.http, format!("Failed to kick user: {:?}", why)).await.unwrap();
+                                } else {
+                                    msg.reply(&ctx.http, "User has been kicked.").await.unwrap();
+                                }
+                            } else {
+                                msg.reply(&ctx.http, "Please mention a user to kick.").await.unwrap();
+                            }
+                        } else {
+                            msg.reply(&ctx.http, "You don't have permission to kick members.").await.unwrap();
+                        }
+                    }
+                },
+                _ => {}
+            }
+        }
+
+        // Basic spam protection
+        let author_id = msg.author.id.0;
+        let now = Instant::now();
+        if let Some(last_message_time) = self.user_last_message.get(&author_id) {
+            if now.duration_since(*last_message_time) < Duration::from_secs(1) {
+                if let Err(why) = msg.delete(&ctx.http).await {
+                    println!("Error deleting message: {:?}", why);
+                }
+                return;
+            }
+        }
+        self.user_last_message.insert(author_id, now);
+    }
+
+    async fn ready(&self, _: Context, ready: Ready) {
+        println!("{} is connected!", ready.user.name);
+    }
+}
+
+#[tokio::main]
+async fn main() {
+    let token = "YOUR_BOT_TOKEN_HERE";
+    let intents = GatewayIntents::GUILD_MESSAGES
+        | GatewayIntents::DIRECT_MESSAGES
+        | GatewayIntents::MESSAGE_CONTENT;
+
+    let mut client = Client::builder(&token, intents)
+        .event_handler(Handler {
+            user_last_message: HashMap::new(),
+        })
+        .await
+        .expect("Err creating client");
+
+    if let Err(why) = client.start().await {
+        println!("Client error: {:?}", why);
+    }
+}
